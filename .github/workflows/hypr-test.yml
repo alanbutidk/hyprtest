@@ -1,0 +1,51 @@
+name: hypr-test
+on:
+  workflow_dispatch:
+  push:
+    paths: ["main.cpp", ".github/workflows/hypr-test.yml"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64-posix
+      - run: >
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 -municode -mwindows -static
+          -fno-exceptions -fno-rtti main.cpp -o hypr.exe
+          -ldwmapi -luser32 -lgdi32 -lgdiplus -lole32
+      - uses: actions/upload-artifact@v4
+        with: { name: hypr-exe, path: hypr.exe }
+
+  test:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: hypr-exe }
+      - name: Run as shell session, open apps, screenshot
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("$PWD\$name.png")
+          }
+          Shot "0-before"
+          $h = Start-Process .\hypr.exe -ArgumentList "--shell-session" -PassThru
+          Start-Sleep 5
+          Shot "1-hypr-started"
+          Start-Process notepad; Start-Sleep 2
+          Start-Process mspaint;  Start-Sleep 2
+          Start-Process calc;     Start-Sleep 3
+          Shot "2-three-apps"
+          "hypr alive: $(-not $h.HasExited)" | Tee-Object log.txt
+          if ($h.HasExited) { "exit code: $($h.ExitCode)" | Tee-Object log.txt -Append }
+          Get-Process | Where-Object MainWindowTitle | Select Name, MainWindowTitle | Out-String | Tee-Object log.txt -Append
+          Get-ChildItem "$env:APPDATA","$env:USERPROFILE\.config" -Recurse -Filter *hypr* -ErrorAction SilentlyContinue | Out-String | Tee-Object log.txt -Append
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: results, path: "*.png\nlog.txt" }
